@@ -1,4 +1,4 @@
-(def static "1.1.0-SNAPSHOT"
+(defproject static "1.1.0-SNAPSHOT"
   :description "Simple static site generator."
   :depenencies [[org.clojure/clojure "1.7.0"]
                 [org.clojure/tools.cli "0.3.2"]
