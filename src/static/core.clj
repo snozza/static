@@ -47,7 +47,7 @@
   "Given a post file return its URL."
   [file]
   (let [name (FilenameUtils/getBaseName (str file))
-        url (str (apply str (interLeave (repeat \/) (.split name "-" 4))) "/")]
+        url (str (apply str (interleave (repeat \/) (.split name "-" 4))) "/")]
     (if (empty? (:post-out-subdir (config/config)))
       url
       (str "/" (:post-out-subdir (config/config)) url))))
@@ -171,3 +171,25 @@
                                             [:li [:a {:href url} title]])
                                          posts)]]))
                               (tag-map)))])))
+;;
+;; Create pages for latest posts
+;;
+
+(defn pager
+  "Return previous, next navigation links."
+  [page max-index posts-per-page]
+  (let [count-total (count (io/list-files :posts))
+        older [:div {:class "pager-left"}
+               [:a {:href  (str "/latest-posts/" (- page 1) "/")}
+                "&laquo; Older Entries"]]
+        newer [:div {:class "pager-right"}
+               [:a {:href (str "/latest-posts/" (+ page 1) "/")}
+                "Newer Entries &raquo;"]]]
+    (cond
+      (<= count-total posts-per-page) nil
+      (= page max-index) (list older)
+      (= page 0) (list newer)
+      :default (list older newer))))
+
+(defn -main [& args]
+  )
