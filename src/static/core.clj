@@ -191,5 +191,36 @@
       (= page 0) (list newer)
       :default (list older newer))))
 
+(defn snippet
+  "Render a post for display in index pages."
+  [f]
+  (let [[metadata content] (io/read-doc f)]
+    [:div [:h2 [:a {:href (post-url f)} (:title metadata)]]
+     [:p {:class "publish_date"}
+      (parse-date "yyyy-MM-dd" "dd MMM yyyy"
+                  (re-find #"\d*-\d*-\d*"
+                           (FilenameUtils/getBaseName (str f))))]
+     [:p @content]]))
+
+(defn create-latest-posts
+  "Create and write latest post pages."
+  []
+  (let [post-per-page (:posts-per-page (config/config))
+        posts (partition posts-per-page
+                         posts-per-page
+                         []
+                         (reverse (io/list-files :posts)))
+        pages (partition 2 (interleave (reverse posts) (range)))
+        [_ max-index] (last pages)]
+    (doseq [[posts page] pages]
+      (io/write-out-dir
+        (str "latest-posts/" page "/index.html")
+        (template
+          [{:title (:site-title (config/config))
+            :description (:site-description (config/config))
+            :template (:default-template (config/config))}
+           (hiccup/html (list (map #(snippet %) posts)
+                              (pager page max-index posts-per-page)))])))))
+
 (defn -main [& args]
   )
