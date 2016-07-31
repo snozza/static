@@ -222,5 +222,39 @@
            (hiccup/html (list (map #(snippet %) posts)
                               (pager page max-index posts-per-page)))])))))
 
+;; Create Archive Pages
+;;
+
+(defn post-count-by-mount
+  "Create a map of month to post count {month => count)"
+  []
+  (->> (io/list-files :posts)
+       (reduce (fn [h v]
+                 (let [date (re-find #"\d*-\d*"
+                                     (FilenameUtils/getBaseName (str v)))]
+                   (if (nil? (h date))
+                     (assoc h date 1)
+                     (assoc h date (+ 1 (h date)))))) {})
+       (sort-by first)
+       reverse))
+
+(defn create-archives
+  "Create and write archive pages."
+  []
+  ;;create main archive page.
+    (str "archives/index.html")
+    (template
+      [{:title "Archives" :template (:default-template (config/config))}
+       (hiccup/html
+         (list [:h2 "Archives"]
+               [:ul
+                (map
+                  (fn [[mount count]]
+                    [:li [:a
+                          {:href (str "/archives/" (.replace mount "-" "/") "/")}
+                          (parse-date "yyyy-MM" "MMMM yyyy" mount)]
+                     (str " (" count ")")])
+                  (post-count-by-mount))]))]))
+
 (defn -main [& args]
   )
