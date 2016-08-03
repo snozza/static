@@ -225,7 +225,7 @@
 ;; Create Archive Pages
 ;;
 
-(defn post-count-by-mount
+(defn post-count-by-month
   "Create a map of month to post count {month => count)"
   []
   (->> (io/list-files :posts)
@@ -242,6 +242,7 @@
   "Create and write archive pages."
   []
   ;;create main archive page.
+  (io/write-out-dir
     (str "archives/index.html")
     (template
       [{:title "Archives" :template (:default-template (config/config))}
@@ -254,7 +255,22 @@
                           {:href (str "/archives/" (.replace mount "-" "/") "/")}
                           (parse-date "yyyy-MM" "MMMM yyyy" mount)]
                      (str " (" count ")")])
-                  (post-count-by-mount))]))]))
+                  (post-count-by-month))]))]))
+
+  ;;create a page for each month
+  (dorun
+    (pmap
+      (fn [month]
+        (let [posts (->> (io/list-files :posts)
+                         (filter #(.startsWith
+                                    (FilenameUtils/getBaseName (str %)) month))
+                         reverse)]
+          (io/write-out-dir
+            (str "archives/" (.replace month "-" "/") "/index.html")
+            (template
+              [{:title "Archives" :template (:default-template (config/config))}
+               (hiccup/html (map snippet posts))]))))
+      (keys (post-count-by-month)))))
 
 (defn -main [& args]
   )
