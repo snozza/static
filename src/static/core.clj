@@ -272,5 +272,193 @@
                (hiccup/html (map snippet posts))]))))
       (keys (post-count-by-month)))))
 
+(defn create-archives
+  "Create and write archive pages."
+  []
+  ;;create main archive page
+  (io/write-out-dir
+    (str "archives/index.html")
+    (template
+      [{:title "Archives" :template (:default-template (config/config))}
+       (hiccup/html
+         (list [:h2 "Archives"]
+               [:ul
+                (map
+                  (fn [[mount count]]
+                    [:li [:a
+                          {:href (str "/archives/" (.replace mount "-" "/") "/")}
+                          (parse-date "yyyy-MM" "MMMM yyyy" mount)]
+                     (str " (" count ")")])
+                  (post-count-by-mount))]))]))
+
+  ;;create a page for each month.
+  (dorun
+    (pmap
+      (fn [month]
+        (let [posts (->> (io/list-files :posts)
+                         (filter #(.startsWith
+                                    (FilenameUtils/getBaseName (str %)) month))
+                         reverse)]
+          (io/write-out-dir
+            (str "archives/" (.replace month "-" "/") "/index.html")
+            (template
+              [{:title "Archives" :template (:default-template (config/config))}
+               (hiccup/html (map snippet posts))]))))
+      (keys (post-count-by-mount)))))
+
+(defn create-aliases
+  "Create redirect pages."
+  ([]
+   (doseq [post (io/list-files :posts)]
+     (create-aliases post))
+   (doseq [site (io/list-files :site)]
+     (create-aliases site)))
+  ([file]
+   (let [doc (io/read-doc file)]
+     (when-let [aliases (-> doc first :alias)]
+       (doseq [alias (read-string aliases)]
+         (io/write-out-dir
+           alias
+           (hiccup/html [:html
+                         [:head
+                          [:meta {:http-equiv "content-type" :content "text/html; charset=utf-8"}]
+                          [:meta {:http-equiv "refresh" :content (str "0;url="(post-url file))}]]])))))))
+
+(defn process-posts
+  "Create and write post pages"
+  []
+  (dorun
+    (pmap
+      #(let [f %
+             [metadata content] (io/read-doc f)
+             out-file (reduce (fn [h v] (.replaceFirst h "-" "/"))
+                              (FilenameUtils/getBaseName (str f)) (range 3))
+             out-file (if (empty? (:post-out-subdir (config/config)))
+                        out-file
+                        (str (:post-out-subdir (config/config)) "/" out-file))]
+
+         (when (empty? @content)
+           (log/warn (str "Empty Content: " f)))
+
+         (io/write-out-dir
+           (str out-file "/index.html")
+           (template
+             [(assoc metadata :type :post :url (post-url f)) @content])))
+      (io/list-files :posts))))
+
+(defn process-public
+  "Copy public from in-dir to out-dir."
+  []
+  (let [in-dir (File. (io/dir-path :public))
+        out-dir (File. (:out-dir (config/config)))]
+    (doseq [f (map #(File. in-dir %) (.list in-dir))]
+      (if (.isFile f)
+        (FileUtils/copyFileToDirectory f out-dir)
+        (FileUtils/copyDirectoryToDirectory f out-dir)))))
+
+(defn create
+  "Build Site."
+  []
+  (doto (File. (:out-dir (config/config)))
+    (FileUtils/deleteDirectory)
+    (.mkdir))
+
+    (log-time-elapsed "Processing Public " (process-public))
+    (log-time-elapsed "Processing Site " (process-site))
+
+    (when (pos? (-> (io/dir-path :posts) (File.) .list count))
+      (log-time-elapsed "Processing Posts " (process-posts))
+      (log-time-elapsed "Creating RSS " (create-rss))
+      (log-time-elapsed "Creating Tags " (create-tags))
+
+      (when (create-archives (config/config))
+        (log-time-elapsed "Creating Archives " (create-archives)))
+
+      (log-time-elapsed "Creating Sitemap " (create-sitemap))
+      (log-time-elapsed "Creating Aliases " (create-alisases))
+
+      (when (:blog-as-index (config/config))
+        (log-time-elapsed "Creating Latest Posts " (create-latest-posts))
+        (let [max (apply max (map read-string (-> (:out-dir (config/config))
+                                                  (str "latest-posts/")
+                                                  (File.)
+                                                  .list)))]
+          (FileUtils/copyFile
+            (File. (str (:out-dir (config/config))
+                        "latest-posts/" max "/index.html"))
+            (File. (str (:out-dir (config/config)) "index.html")))))))
+
+(defn serve-static [req]
+  (let [mime-types {".clj" "text/plain"
+                    ".mp4" "video/mp4"
+                    ".ogv" "video/ogg"}]
+    (if-let [f (file-response (:uri req) {:root (:out-dir (config/config))})]
+      (if-let [mimetype (mime-types (re-find #"\..+$" (:uri req)))]
+        (merge f {:headers {"Content-Type" mimetype}})
+        f))))
+
+(defn watch-and-rebuild
+  "Watch for changes and rebuild site on change"
+  []
+  (watcher/watcher [(:in-dir (config/config))]
+                   (watcher/rate 1000)
+                   (watcher/on-change
+                     (fn [_]
+                       (log/info "Rebuilding site...")
+                       (try
+                         (memo-clear! io/read-template)
+                         (create)
+                         (catch Exception e
+                           (log/error (str "Exception thrown while building site! " e))))))))
+
+(def cli-opts [[nil "--build" "Build Site."]
+               [nil "--tmp" "Use tmp location override :out-dir"]
+               [nil "--jetty" "View Site."]
+               [nil "--watch" "Watch Site and Rebuild on Change."]
+               [nil "--rsync" "Deploy Site."]
+               [nil "--help" "Show help"]])
+
+
 (defn -main [& args]
-  )
+  (let [{:keys [options summary errors]} (cli/parse-opts args cli-opts)
+        {:keys [build tmp jetty watch rsync help]} options]
+
+    (when errors
+      (println (str/join "\n" errors))
+      (System/exit 1))
+
+    (when help
+      (println "Static: a static blog generator.\n")
+      (println "Usage: static <option>:")
+      (println summary)
+      (System/exit 0))
+
+    (setup-logging)
+
+    (let [out-dir (:out-dir (config/config))
+          tmp-dir (str (System/getProperty "java.io.tmpdir") "/" "static/")]
+
+      (when (or tmp
+                (and (:atomic-build (config/config))
+                     build))
+        (let [loc (FilenameUtils/normalize tmp-dir)]
+          (config/set!-config :out-dir loc)
+          (log/info (str "Using tmp location: " (:out-dir (config/config))))))
+
+      (cond build (log-time-elapsed "Build took " (create))
+            watch (do (watch-and-rebuild)
+                      (future (jetty/run-jetty serve-static {:port 8080}))
+                      (browse/browse-url "http://127.0.0.1:8080"))
+            jetty (do (future (jetty/run-jetty serve-static {:port 8080}))
+                      (browse/browse-url "http://127.0.0.1:8080"))
+            rsync (let [{:keys [rsync out-dir host user deploy-url]} (config/config)]
+                    (io/deploy-rsync rsync out-dir host user deploy-dir))
+            :default (println "Use --help for options."))
+
+      (when (and (:atomic-build (config/config))
+                 build)
+        (FileUtils/deleteDirectory (File. out-dir))
+        (FileUtils/modeDirectory (File. tmp-dir) (File. out-dir))))
+
+    (when-not watch
+      shutdown-agents)))
